@@ -138,3 +138,42 @@ WARN Native VoLTE SMS runtime failed ... volte_modemmanager_debug_required
 包内 `bin/mm-debug-ensure` 会在服务启动前把 `/etc/init.d/modemmanager` 的
 `LOG_LEVEL="INFO"` 改成 `DEBUG`（幂等），并重启一次 MM。刷机后该修改会丢失，
 重装本包即自动恢复。
+
+## 防火墙：必须放行入站 ESP/AH
+
+IMS 的 SIP 走 ESP（IP 协议 50）/AH，不是 TCP/UDP，fw4 默认 input 策略会丢包，
+表现为 IPsec SA 已安装、REGISTER 已发出，但等不到回包：
+
+```
+INFO Native VoLTE 3GPP TS 33.203 4-SA IPsec xfrm installed ...
+INFO Native VoLTE IPsec authenticated REGISTER sent, awaiting response ...
+WARN Native VoLTE IPsec registration failed, falling back to plain UDP SIP
+     reason=volte_udp_recv_timeout
+```
+
+`install.sh` 会自动写入两条 UCI 规则（幂等，已存在则跳过）：
+
+```ini
+config rule
+	option name 'Allow-IPsec-ESP'
+	option src 'wan'
+	option proto 'esp'
+	option target 'ACCEPT'
+
+config rule
+	option name 'Allow-IPsec-AH'
+	option src 'wan'
+	option proto 'ah'
+	option target 'ACCEPT'
+```
+
+若 IMS 接口不在 wan zone（自建 zone / 未归属 zone），需把 `src` 改成对应 zone，
+或改用 `/etc/nftables.d/20-volte-ipsec.nft`：
+
+```
+chain volte_ipsec {
+	type filter hook input priority -10; policy accept;
+	ip protocol esp accept
+	ip6 nexthdr esp accept
+}
+```

@@ -42,6 +42,37 @@ fi
 # 内存/闪存提示
 echo "==> 磁盘剩余:" $(df -k "$INSTALL_DIR" 2>/dev/null | awk 'NR==2{print $4"KB"}')
 
+# ---------------------------------------------------------------
+# 放行入站 ESP/AH（IMS IPsec）
+# 3GPP IMS 的 SIP REGISTER 走 ESP（IP 协议 50），不是 TCP/UDP，
+# OpenWrt fw4 的默认 input 策略会直接丢弃回包，表现为引擎
+# "volte_udp_recv_timeout" 后退化到明文 UDP 并被 420 拒绝。
+# ---------------------------------------------------------------
+ensure_ipsec_fwrule() {
+	[ -f /etc/config/firewall ] || return 0
+	command -v uci >/dev/null 2>&1 || return 0
+
+	if ! uci show firewall 2>/dev/null | grep -q "Allow-IPsec-ESP"; then
+		uci add firewall rule >/dev/null
+		uci set firewall.@rule[-1].name='Allow-IPsec-ESP'
+		uci set firewall.@rule[-1].src='wan'
+		uci set firewall.@rule[-1].proto='esp'
+		uci set firewall.@rule[-1].target='ACCEPT'
+		uci add firewall rule >/dev/null
+		uci set firewall.@rule[-1].name='Allow-IPsec-AH'
+		uci set firewall.@rule[-1].src='wan'
+		uci set firewall.@rule[-1].proto='ah'
+		uci set firewall.@rule[-1].target='ACCEPT'
+		uci commit firewall
+		echo "==> 已为 wan 放行入站 ESP/AH（VoLTE IPsec 必需）"
+		/etc/init.d/firewall reload >/dev/null 2>&1 || true
+	else
+		echo "==> 防火墙 ESP/AH 规则已存在，跳过"
+	fi
+}
+
+ensure_ipsec_fwrule
+
 if [ "$START_SERVICE" = "1" ]; then
 	/etc/init.d/simadmin enable >/dev/null 2>&1 || true
 	/etc/init.d/simadmin restart >/dev/null 2>&1 || /etc/init.d/simadmin start
