@@ -1,0 +1,33 @@
+#!/bin/sh
+# mm-debug-ensure —— 确保 ModemManager 以 debug 日志级别运行
+#
+# 为什么必须：
+#   上游 VoLTE 引擎通过 `mmcli -m any --command='AT+...'` 读写模组（AT+CIMI、
+#   AT+CIREG、短信收发等）。ModemManager 的安全策略限制：
+#       非 debug 模式下所有 --command 一律返回
+#       "Unauthorized: Operation only allowed in debug mode"
+#   结果就是引擎拿不到 AT 通道，日志表现为：
+#       WARN Native VoLTE ModemManager AT+CIMI failed ... volte_modemmanager_debug_required
+#
+# OpenWrt 的 /etc/init.d/modemmanager 把 LOG_LEVEL 硬编码为 INFO，且刷机后
+# 会被还原，所以每次服务启动前都校正一次（幂等，已为 DEBUG 时直接返回）。
+
+INIT=/etc/init.d/modemmanager
+[ -f "$INIT" ] || exit 0
+
+if grep -q 'LOG_LEVEL="DEBUG"' "$INIT"; then
+	exit 0
+fi
+
+if sed -i 's/^LOG_LEVEL="INFO"/LOG_LEVEL="DEBUG"/' "$INIT" 2>/dev/null &&
+	grep -q 'LOG_LEVEL="DEBUG"' "$INIT"; then
+	logger -t simadmin "mm-debug-ensure: 已把 ModemManager 日志级别改为 DEBUG（AT 通道需要）"
+	# 级别只在进程启动时生效，必须重启 MM
+	"$INIT" restart >/dev/null 2>&1
+	# 重启后 modem 会回到 disabled，交给 modem-ready 处理
+	sleep 3
+else
+	logger -t simadmin "mm-debug-ensure: 修改 $INIT 失败，AT 通道可能不可用"
+fi
+
+exit 0

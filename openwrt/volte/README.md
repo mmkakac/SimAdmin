@@ -123,3 +123,18 @@ zcat /proc/config.gz | grep -E "XFRM_USER|INET_ESP"
 
 顺带说明：msm89xx/msm8916（UF896 类）社区 target 的 `config-5.10` 默认没有任何 XFRM 选项，
 属于常见裁剪点；若固件由厂商提供且无法重编，VoLTE 只能等厂商放带 IMS 的固件。
+
+## 依赖项：ModemManager 必须处于 debug 日志级别
+
+VoLTE 引擎用 `mmcli -m any --command='AT+...'` 读写模组（AT+CIMI / AT+CIREG / 短信收发）。
+ModemManager 的安全策略规定：**非 debug 模式下所有 `--command` 一律拒绝**，返回
+`Unauthorized: Operation only allowed in debug mode`，日志表现为：
+
+```
+WARN Native VoLTE ModemManager AT+CIMI failed ... volte_modemmanager_debug_required
+WARN Native VoLTE SMS runtime failed ... volte_modemmanager_debug_required
+```
+
+包内 `bin/mm-debug-ensure` 会在服务启动前把 `/etc/init.d/modemmanager` 的
+`LOG_LEVEL="INFO"` 改成 `DEBUG`（幂等），并重启一次 MM。刷机后该修改会丢失，
+重装本包即自动恢复。
