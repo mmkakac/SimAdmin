@@ -18,9 +18,22 @@ use std::time::Duration;
 
 /// OTA 相关路径
 const OTA_STAGING_DIR: &str = "/tmp/ota_staging";
-const OTA_BINARY_PATH: &str = "/opt/simadmin/simadmin";
-const OTA_WWW_PATH: &str = "/opt/simadmin/www";
-const OTA_META_PATH: &str = "/opt/simadmin/meta.json";
+/// 安装目录：默认 /opt/simadmin，OpenWrt 下可用 SIMADMIN_INSTALL_DIR 覆盖
+fn install_dir() -> PathBuf {
+    match std::env::var_os("SIMADMIN_INSTALL_DIR") {
+        Some(dir) => PathBuf::from(dir),
+        None => PathBuf::from("/opt/simadmin"),
+    }
+}
+fn ota_binary_path() -> PathBuf {
+    install_dir().join("simadmin")
+}
+fn ota_www_path() -> PathBuf {
+    install_dir().join("www")
+}
+fn ota_meta_path() -> PathBuf {
+    install_dir().join("meta.json")
+}
 const OTA_SERVICE_NAME: &str = "simadmin.service";
 const NM_CONF_PATH: &str = "/etc/NetworkManager/conf.d/99-simadmin-unmanaged-modem.conf";
 const LATEST_RELEASE_API: &str = "https://api.github.com/repos/3899/SimAdmin/releases/latest";
@@ -95,7 +108,7 @@ fn target_triple_for_host_arch(arch: &str) -> Option<&'static str> {
 
 /// 读取已安装的更新元数据
 fn read_installed_meta() -> Option<OtaMeta> {
-    if let Ok(content) = fs::read_to_string(OTA_META_PATH) {
+    if let Ok(content) = fs::read_to_string(ota_meta_path()) {
         serde_json::from_str(&content).ok()
     } else {
         None
@@ -865,12 +878,12 @@ pub fn apply_ota_update(restart_now: bool) -> Result<String, String> {
     let staging_binary = format!("{}/simadmin", OTA_STAGING_DIR);
     let staging_www = format!("{}/www", OTA_STAGING_DIR);
 
-    install_binary_atomic(&staging_binary, OTA_BINARY_PATH)?;
+    install_binary_atomic(&staging_binary, ota_binary_path())?;
 
     // 复制前端文件（删除旧目录，复制新目录）
-    let _ = fs::remove_dir_all(OTA_WWW_PATH);
-    copy_dir_recursive(&staging_www, OTA_WWW_PATH)?;
-    chmod_www_tree(OTA_WWW_PATH)?;
+    let _ = fs::remove_dir_all(ota_www_path());
+    copy_dir_recursive(&staging_www, ota_www_path())?;
+    chmod_www_tree(ota_www_path())?;
 
     install_meta_file()?;
     let nm_result = remove_legacy_networkmanager_modem_unmanaged();
@@ -903,11 +916,11 @@ fn remove_legacy_networkmanager_modem_unmanaged() -> String {
     "No legacy NetworkManager unmanaged config found".to_string()
 }
 
-fn install_binary_atomic(src: &str, dst: &str) -> Result<(), String> {
-    let dst_path = Path::new(dst);
+fn install_binary_atomic(src: impl AsRef<std::path::Path>, dst: impl AsRef<std::path::Path>) -> Result<(), String> {
+    let dst_path = dst.as_ref();
     let dst_dir = dst_path
         .parent()
-        .ok_or_else(|| format!("Invalid binary path: {}", dst))?;
+        .ok_or_else(|| format!("Invalid binary path: {}", dst_path.display()))?;
     fs::create_dir_all(dst_dir).map_err(|e| format!("Failed to create binary dir: {}", e))?;
 
     let tmp_path = ota_temp_binary_path(dst_path);
@@ -932,7 +945,7 @@ fn install_binary_atomic(src: &str, dst: &str) -> Result<(), String> {
         ));
     }
 
-    fs::rename(&tmp_path, dst).map_err(|e| {
+    fs::rename(&tmp_path, dst_path).map_err(|e| {
         let _ = fs::remove_file(&tmp_path);
         format!("Failed to replace binary: {}", e)
     })?;
@@ -948,9 +961,11 @@ fn ota_temp_binary_path(dst: &Path) -> PathBuf {
     dst.with_file_name(format!(".{}.ota-new", file_name))
 }
 
-fn chmod_www_tree(path: &str) -> Result<(), String> {
+fn chmod_www_tree(path: impl AsRef<std::path::Path>) -> Result<(), String> {
     let output = Command::new("chmod")
-        .args(["-R", "a+rX", path])
+        .arg("-R")
+        .arg("a+rX")
+        .arg(path.as_ref())
         .output()
         .map_err(|e| format!("Failed to chmod www: {}", e))?;
 
@@ -970,11 +985,12 @@ fn install_meta_file() -> Result<(), String> {
         return Ok(());
     }
 
-    fs::copy(&staging_meta, OTA_META_PATH)
+    fs::copy(&staging_meta, ota_meta_path())
         .map_err(|e| format!("Failed to copy meta.json: {}", e))?;
 
     let output = Command::new("chmod")
-        .args(["644", OTA_META_PATH])
+        .arg("644")
+        .arg(ota_meta_path())
         .output()
         .map_err(|e| format!("Failed to chmod meta.json: {}", e))?;
 
@@ -989,27 +1005,33 @@ fn install_meta_file() -> Result<(), String> {
 }
 
 fn restart_service_no_block() {
-    let _ = Command::new("systemctl")
-        .args(["--no-block", "restart", OTA_SERVICE_NAME])
-        .output();
+    // systemd 上可异步重启；procd 用 /etc/init.d/simadmin restart（同样会异步返回）
+    let _ = crate::service_manager::daemon_reload();
+    let _ = std::process::Command::new("sh")
+        .arg("-c")
+        .arg(if crate::service_manager::is_openwrt() {
+            "/etc/init.d/simadmin restart >/dev/null 2>&1 &"
+        } else {
+            "systemctl --no-block restart simadmin.service >/dev/null 2>&1 &"
+        })
+        .spawn();
+    let _ = OTA_SERVICE_NAME;
 }
 
 /// 递归复制目录
-fn copy_dir_recursive(src: &str, dst: &str) -> Result<(), String> {
-    fs::create_dir_all(dst).map_err(|e| format!("Failed to create dir: {}", e))?;
+fn copy_dir_recursive(src: impl AsRef<std::path::Path>, dst: impl AsRef<std::path::Path>) -> Result<(), String> {
+    let dst_root = dst.as_ref();
+    fs::create_dir_all(dst_root).map_err(|e| format!("Failed to create dir: {}", e))?;
 
     let entries = fs::read_dir(src).map_err(|e| format!("Failed to read src dir: {}", e))?;
 
     for entry in entries {
         let entry = entry.map_err(|e| format!("Failed to read entry: {}", e))?;
         let src_path = entry.path();
-        let dst_path = Path::new(dst).join(entry.file_name());
+        let dst_path = dst_root.join(entry.file_name());
 
         if src_path.is_dir() {
-            copy_dir_recursive(
-                src_path.to_str().unwrap_or(""),
-                dst_path.to_str().unwrap_or(""),
-            )?;
+            copy_dir_recursive(&src_path, &dst_path)?;
         } else {
             fs::copy(&src_path, &dst_path).map_err(|e| format!("Failed to copy file: {}", e))?;
         }

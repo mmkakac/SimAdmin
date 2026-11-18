@@ -1052,7 +1052,20 @@ fn beijing_time_string() -> String {
 // frontend for compatibility with minimal Debian images where nmcli is the
 // stable administrative interface already present with NetworkManager.
 
+fn openwrt_wlan_hint() -> String {
+    "OpenWrt 环境不提供 nmcli 的 WLAN 客户端管理，请在 LuCI（网络→无线）或 /etc/config/wireless 中配置"
+        .to_string()
+}
+
 pub async fn wlan_status() -> Result<WlanStatusResponse, String> {
+    if crate::service_manager::is_openwrt() {
+        // OpenWrt 的无线由 netifd/wpa_supplicant 统一管理，没有 NetworkManager。
+        // 这里不猜测设备状态，直接返回“不可用”，引导用户去 LuCI。
+        return Ok(WlanStatusResponse {
+            available: false,
+            ..WlanStatusResponse::default()
+        });
+    }
     let radio = run_nmcli(&["-t", "-f", "WIFI,WIFI-HW", "general", "status"]).await?;
     let fields = split_nmcli_fields(radio.lines().next().unwrap_or_default());
     let enabled = fields.first().map(|v| v == "enabled").unwrap_or(false);
@@ -1129,11 +1142,17 @@ pub async fn wlan_status() -> Result<WlanStatusResponse, String> {
 }
 
 pub async fn wlan_set_enabled(req: WlanEnabledRequest) -> Result<WlanStatusResponse, String> {
+    if crate::service_manager::is_openwrt() {
+        return Err(openwrt_wlan_hint());
+    }
     run_nmcli(&["radio", "wifi", if req.enabled { "on" } else { "off" }]).await?;
     wlan_status().await
 }
 
 pub async fn wlan_scan() -> Result<WlanScanResponse, String> {
+    if crate::service_manager::is_openwrt() {
+        return Err(openwrt_wlan_hint());
+    }
     let output = run_nmcli(&[
         "-t",
         "-f",
@@ -1169,6 +1188,9 @@ pub async fn wlan_scan() -> Result<WlanScanResponse, String> {
 }
 
 pub async fn wlan_profiles() -> Result<WlanProfilesResponse, String> {
+    if crate::service_manager::is_openwrt() {
+        return Err(openwrt_wlan_hint());
+    }
     let output = run_nmcli(&[
         "-t",
         "-f",
@@ -1217,6 +1239,9 @@ pub async fn wlan_profiles() -> Result<WlanProfilesResponse, String> {
 }
 
 pub async fn wlan_forget(req: WlanForgetRequest) -> Result<WlanProfilesResponse, String> {
+    if crate::service_manager::is_openwrt() {
+        return Err(openwrt_wlan_hint());
+    }
     if !req.uuid.trim().is_empty() {
         run_nmcli(&["connection", "delete", "uuid", req.uuid.trim()]).await?;
     } else if !req.connection_id.trim().is_empty() {
@@ -1228,6 +1253,9 @@ pub async fn wlan_forget(req: WlanForgetRequest) -> Result<WlanProfilesResponse,
 }
 
 pub async fn wlan_connect(req: WlanConnectRequest) -> Result<WlanStatusResponse, String> {
+    if crate::service_manager::is_openwrt() {
+        return Err(openwrt_wlan_hint());
+    }
     let status = wlan_status().await?;
     let iface = status
         .interface_name
@@ -1261,6 +1289,9 @@ pub async fn wlan_connect(req: WlanConnectRequest) -> Result<WlanStatusResponse,
 }
 
 pub async fn wlan_disconnect() -> Result<WlanStatusResponse, String> {
+    if crate::service_manager::is_openwrt() {
+        return Err(openwrt_wlan_hint());
+    }
     let status = wlan_status().await?;
     if let Some(iface) = status.interface_name {
         run_nmcli(&["device", "disconnect", iface.as_str()]).await?;
@@ -1269,6 +1300,9 @@ pub async fn wlan_disconnect() -> Result<WlanStatusResponse, String> {
 }
 
 pub async fn wlan_save_profile(req: WlanProfileRequest) -> Result<WlanStatusResponse, String> {
+    if crate::service_manager::is_openwrt() {
+        return Err(openwrt_wlan_hint());
+    }
     run_nmcli(&[
         "connection",
         "modify",

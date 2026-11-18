@@ -62,6 +62,38 @@ pub async fn get_iptables_rule_count() -> Result<IptablesRuleCount, String> {
             }
         }
 
+        // OpenWrt 默认使用 nftables（fw4），通常没有 iptables 前端。
+        // 这里退回 `nft list ruleset` 做只读统计：iplimit/ip6 无法精确区分时，
+        // 按规则文本中的 family 归类，仍保持"只读诊断"语义。
+        if count.ipv4_rules == 0 && count.ipv6_rules == 0 {
+            if let Ok(output) = Command::new("nft").args(["list", "ruleset"]).output() {
+                if output.status.success() {
+                    let stdout = String::from_utf8_lossy(&output.stdout);
+                    let mut v4 = 0usize;
+                    let mut v6 = 0usize;
+                    for line in stdout.lines() {
+                        let trimmed = line.trim_start();
+                        if !trimmed.contains("rule") && !trimmed.starts_with("add rule") {
+                            continue;
+                        }
+                        // nft 文本输出里同一 chain 下会带 "ip"/"ip6" 关键字
+                        if trimmed.contains("ip6") || trimmed.contains("ipv6") {
+                            v6 += 1;
+                        } else if trimmed.contains("ip ")
+                            || trimmed.contains("ip\t")
+                            || trimmed.contains("ct ")
+                            || trimmed.contains("tcp ")
+                            || trimmed.contains("udp ")
+                        {
+                            v4 += 1;
+                        }
+                    }
+                    count.ipv4_rules = v4;
+                    count.ipv6_rules = v6;
+                }
+            }
+        }
+
         Ok(count)
     })
     .await
