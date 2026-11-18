@@ -51,16 +51,13 @@ cat <<'EOF'
 
 ==> 安装完成。接下来：
 
-1) 安装运行依赖（OpenWrt）：
-   opkg update
-   opkg install dbus modemmanager libqmi-utils
-   # 可选：libmbim-utils iptables
+1) 运行依赖：
+   - ModemManager + dbus 必须在固件里（VoLTE 引擎通过 mmcli/MM 管理模组）
+   - qmicli 已随本包内置（/opt/simadmin/bin/qmicli），无需再装 qmi-utils
+   - 验证：mmcli -L 能看到 Modem/N，且 qmicli -d /dev/cdc-wdm0 -p --dms-get-manufacturer 有回
 
-2) 蜂窝接口（/etc/config/network）：
-   config interface 'wwan'
-       option proto 'modemmanager'
-       option apn 'ctnet'
-       option autoconnect '0'
+2) 蜂窝接口（可选，VoLTE 不依赖它也能跑数据面）：
+   在 LuCI 里创建一个 ModemManager 协议的接口，或直接由 VoLTE 引擎接管 IMS APN。
 
 3) 打开 Web：http://<设备IP>:3000
    查看日志：logread -f | grep simadmin

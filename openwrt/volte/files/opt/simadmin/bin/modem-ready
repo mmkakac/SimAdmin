@@ -1,0 +1,35 @@
+#!/bin/sh
+# modem-ready —— 等待 ModemManager 就绪并确保 modem 处于 enabled 状态
+#
+# OpenWrt 上 ModemManager 每次 restart 都会把 modem 打回 `disabled`，
+# 此时 `mmcli --command` / VoLTE 引擎的 AT 通道全部不可用（报
+# "couldn't find modem" 或 "Operation only allowed in debug mode"）。
+# 上游 VoLTE 版习惯性 `systemctl restart ModemManager.service`，这里补上后置动作。
+#
+# 用法：modem-ready [最大重试次数，默认 25，每次间隔 2 秒]
+
+TRIES=${1:-25}
+i=0
+
+while [ $i -lt "$TRIES" ]; do
+	if mmcli -L 2>/dev/null | grep -q 'Modem/'; then
+		st=$(mmcli -m any 2>/dev/null | sed -n 's/.*| *state: *//p' | head -1)
+		case "$st" in
+			disabled|"")
+				mmcli -m any -e >/dev/null 2>&1 && \
+					logger -t simadmin "modem-ready: modem enabled"
+				;;
+			*)
+				[ "$st" = "registered" ] && exit 0
+				exit 0
+				;;
+		esac
+	else
+		logger -t simadmin "modem-ready: waiting for ModemManager (${i}/${TRIES})"
+	fi
+	i=$((i + 1))
+	sleep 2
+done
+
+logger -t simadmin "modem-ready: gave up after ${TRIES} tries"
+exit 1

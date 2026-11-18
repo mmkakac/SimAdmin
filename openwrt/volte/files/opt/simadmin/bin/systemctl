@@ -38,6 +38,13 @@ case "$SUB" in
 		if init_exists "$SVC"; then
 			if [ "$SUB" = "condrestart" ]; then SUB="restart"; fi
 			/etc/init.d/"$SVC" "$SUB" >/dev/null 2>&1
+			# MM 重启后 modem 会回到 disabled，必须补一次 enable，
+			# 否则随后的 AT/QMI 操作全部失败。放后台避免阻塞上游流程。
+			if [ "$SVC" = "modemmanager" ]; then
+				BIN_DIR=$(dirname "$0")
+				[ -x "$BIN_DIR/modem-ready" ] || BIN_DIR=/opt/simadmin/bin
+				( sleep 4; "$BIN_DIR/modem-ready" 20 >/dev/null 2>&1 ) &
+			fi
 			exit 0
 		fi
 		echo "[systemctl-shim] no /etc/init.d/$SVC (unit: $UNIT), ignored" >&2
