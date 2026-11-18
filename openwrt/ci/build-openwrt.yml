@@ -1,10 +1,7 @@
 name: Build-OpenWrt-Package
 
-# 面向 OpenWrt（musl / 无 systemd）的静态二进制构建，产出可直接 scp 到设备使用的 tar.gz。
-# 与 build-ota-package.yml 的区别：
-#   - 不向 3899/SimAdmin 上传 Release（fork 上跑不会因缺少上游 token 失败）
-#   - x86_64 使用真 musl 静态；aarch64 / armv7 使用全静态 glibc（OpenWrt 内核可直接执行）
-#   - 额外打包 procd 服务脚本、UCI 配置与安装脚本
+# 只在手动触发时构建（不在 push 时自动跑）。
+# 当前只产出 aarch64（ARM64）静态二进制；后续需要 x86_64 / armv7 时把对应矩阵项加回来即可。
 
 on:
   workflow_dispatch:
@@ -14,19 +11,10 @@ on:
         required: false
         default: 'auto'
       use_upx:
-        description: '使用 UPX 压缩（armv7 自动跳过）'
+        description: '使用 UPX 压缩二进制'
         required: false
         type: boolean
         default: false
-  push:
-    branches:
-      - main
-    paths:
-      - 'backend/**'
-      - 'crates/**'
-      - 'frontend/**'
-      - 'openwrt/**'
-      - '.github/workflows/build-openwrt.yml'
 
 env:
   CARGO_TERM_COLOR: always
@@ -59,27 +47,13 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # ---- x86_64: 真 musl 静态（软路由 / 虚拟机）----
-          - arch: x86_64
-            target: x86_64-unknown-linux-musl
-            cc: musl-gcc
-            linker_env: CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER
-            linker: musl-gcc
-            extra_apt: musl-tools
-          # ---- aarch64: 交叉 gcc + crt-static（全静态，不依赖 OpenWrt libc）----
+          # aarch64：交叉 gcc + crt-static，全静态，不依赖 OpenWrt libc
           - arch: aarch64
             target: aarch64-unknown-linux-gnu
             cc: aarch64-linux-gnu-gcc
             linker_env: CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER
             linker: aarch64-linux-gnu-gcc
             extra_apt: gcc-aarch64-linux-gnu
-          # ---- armv7 hard-float ----
-          - arch: armv7
-            target: armv7-unknown-linux-gnueabihf
-            cc: arm-linux-gnueabihf-gcc
-            linker_env: CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER
-            linker: arm-linux-gnueabihf-gcc
-            extra_apt: gcc-arm-linux-gnueabihf
     steps:
       - uses: actions/checkout@v4
 
@@ -114,10 +88,10 @@ jobs:
           RUSTFLAGS: -C target-feature=+crt-static
         run: |
           export ${LINKER_ENV}="${LINKER}"
-          export CC_$(echo "$TARGET" | tr '-' '_')="$CC_TARGET"
+          NAME=$(echo "$TARGET" | tr '-' '_')
+          export CC_${NAME}="$CC_TARGET"
           cargo build --locked --release --target "$TARGET" -p simadmin
           file "target/$TARGET/release/simadmin"
-          readelf -d "target/$TARGET/release/simadmin" | grep -c NEEDED || true
 
       - name: Build frontend
         run: |
@@ -138,7 +112,7 @@ jobs:
           mkdir -p "$OUT/bin/$ARCH" "$OUT/files"
           cp "target/$TARGET/release/simadmin" "$OUT/bin/$ARCH/simadmin"
           chmod 755 "$OUT/bin/$ARCH/simadmin"
-          if [ "${{ inputs.use_upx }}" = "true" ] && [ "$ARCH" != "armv7" ]; then
+          if [ "${{ inputs.use_upx }}" = "true" ]; then
             upx --best --lzma "$OUT/bin/$ARCH/simadmin" || true
           fi
           cp -r frontend/dist "$OUT/www"

@@ -48,8 +48,9 @@ config interface 'wwan'
 
 ## 4. 编译
 
-GitHub Actions 已提供 `.github/workflows/build-openwrt.yml`（手动触发 / 推送自动触发），
-产出三个架构的静态二进制包（tar.gz），不依赖上游 Release 权限。
+GitHub Actions 已提供 `.github/workflows/build-openwrt.yml`（**仅手动触发**，不会因提交自动运行），
+当前只构建 **aarch64** 静态二进制包（tar.gz），不依赖上游 Release 权限。
+需要 x86_64 / armv7 时，在 workflow 的 `matrix.include` 中把对应条目加回来即可。
 
 本地编译：
 
@@ -82,7 +83,7 @@ sh install.sh
 `install.sh` 会按 `uname -m` 选择 `bin/<arch>/simadmin`，安装到 `/opt/simadmin`，
 数据目录 `/etc/simadmin`，注册 procd 服务 `/etc/init.d/simadmin`。
 
-## 6. 功能可用性
+## 6. 功能可用性（重要：不是 100% 等价）
 
 | 能力 | 状态 | 说明 |
 |---|---|---|
