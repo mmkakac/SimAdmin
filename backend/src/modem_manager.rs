@@ -1163,12 +1163,7 @@ pub async fn try_recover_stuck_modem(reason: &str) -> bool {
     }
 
     info!("Restarting ModemManager to re-enumerate modem devices");
-    let restart_res = run_recovery_command_owned(
-        "systemctl",
-        &["restart".to_string(), "ModemManager.service".to_string()],
-        Duration::from_secs(15),
-    )
-    .await;
+    let restart_res = crate::service_manager::restart("ModemManager.service").await;
     if let Err(e) = restart_res {
         warn!(error = %e, "Failed to restart ModemManager during recovery");
         return false;
@@ -4393,6 +4388,17 @@ async fn set_data_connection_inner(
     allow_roaming: bool,
     configured_apn: Option<&ApnConfig>,
 ) -> zbus::Result<()> {
+    // OpenWrt：拨号由 netifd 管理（/etc/config/network 里 proto=modemmanager），
+    // 这里只做 ifup/ifdown，不写 NM profile，避免与 netifd 争用同一个 modem。
+    if crate::service_manager::is_openwrt() {
+        let _ = (conn, allow_roaming, configured_apn);
+        crate::service_manager::set_wwan_link(active)
+            .await
+            .map(|msg| info!(message = %msg, "Cellular data state applied via netifd"))
+            .map_err(|err| zbus::fdo::Error::Failed(err))?;
+        return Ok(());
+    }
+
     with_serial(async {
         let profile = find_nm_modem_connection()
             .await
@@ -6364,6 +6370,14 @@ pub async fn init_data_connection(
 
 /// 启动时确保 NM 有可用的 modem 连接 profile；同时清理旧版本遗留的 unmanaged 配置
 pub async fn ensure_nm_modem_profile() -> String {
+    // OpenWrt 用 netifd + ModemManager 的 proto，不使用 NetworkManager；
+    // 这里直接跳过整个 NM profile 流程，避免 nmcli/systemctl 报错。
+    if crate::service_manager::is_openwrt() {
+        info!("OpenWrt detected: skip NetworkManager modem profile setup (netifd owns dialing)");
+        return "OpenWrt: NetworkManager profile setup skipped (netifd + ModemManager proto in use)"
+            .to_string();
+    }
+
     // 1. Remove old unmanaged config if it exists
     let legacy_config = "/etc/NetworkManager/conf.d/99-simadmin-unmanaged-modem.conf";
     if tokio::fs::metadata(legacy_config).await.is_ok() {
@@ -6372,30 +6386,17 @@ pub async fn ensure_nm_modem_profile() -> String {
         } else {
             info!("Removed legacy NM unmanaged-modem config");
             // Restart NM to pick up the change
-            if let Ok(status) = Command::new("systemctl")
-                .args(["is-active", "--quiet", "NetworkManager.service"])
-                .status()
-                .await
-            {
-                if status.success() {
-                    let _ =
-                        run_recovery_command("systemctl", &["restart", "NetworkManager.service"])
-                            .await;
-                    // Give NM a moment to come back and discover the modem
-                    tokio::time::sleep(Duration::from_secs(3)).await;
-                }
+            if crate::service_manager::is_active("NetworkManager.service").await {
+                let _ = crate::service_manager::restart("NetworkManager.service").await;
+                // Give NM a moment to come back and discover the modem
+                tokio::time::sleep(Duration::from_secs(3)).await;
             }
         }
     }
 
     // 2. Check if NM is running
-    match Command::new("systemctl")
-        .args(["is-active", "--quiet", "NetworkManager.service"])
-        .status()
-        .await
-    {
-        Ok(status) if status.success() => {}
-        _ => return "NetworkManager is not active, NM modem profile setup skipped".to_string(),
+    if !crate::service_manager::is_active("NetworkManager.service").await {
+        return "NetworkManager is not active, NM modem profile setup skipped".to_string();
     }
 
     // 3. Find or create modem profile
@@ -6807,7 +6808,7 @@ async fn power_cycle_sim_for_profile_switch_inner(
     } else {
         // 标准 QMI 设备流程：断电重启 ModemManager 与 SIM
         record_baseband_step(&mut steps, "停止 ModemManager", "running", None);
-        match run_recovery_command("systemctl", &["stop", "ModemManager"]).await {
+        match crate::service_manager::stop("ModemManager").await {
             Ok(output) => record_baseband_step(&mut steps, "停止 ModemManager", "ok", Some(output)),
             Err(err) => record_baseband_step(
                 &mut steps,
@@ -6818,14 +6819,10 @@ async fn power_cycle_sim_for_profile_switch_inner(
         }
         // Poll for MM to become inactive instead of a fixed 3s sleep
         for _ in 0..6 {
-            match Command::new("systemctl")
-                .args(["is-active", "--quiet", "ModemManager.service"])
-                .status()
-                .await
-            {
-                Ok(status) if !status.success() => break,
-                _ => tokio::time::sleep(Duration::from_millis(500)).await,
+            if !crate::service_manager::is_active("ModemManager.service").await {
+                break;
             }
+            tokio::time::sleep(Duration::from_millis(500)).await;
         }
 
         let power_result: Result<(), String> = async {
@@ -6878,7 +6875,7 @@ async fn power_cycle_sim_for_profile_switch_inner(
         .await;
 
         record_baseband_step(&mut steps, "启动 ModemManager", "running", None);
-        let start_result = run_recovery_command("systemctl", &["start", "ModemManager"]).await;
+        let start_result = crate::service_manager::start("ModemManager").await;
         match &start_result {
             Ok(output) => {
                 record_baseband_step(&mut steps, "启动 ModemManager", "ok", Some(output.clone()))
@@ -7323,7 +7320,7 @@ pub async fn data_connection_watchdog(
                             if let Some(qmi_dev) = find_qmi_device_path() {
                                 let _ = qmicli_sim_power(&qmi_dev, true).await;
                             }
-                            match run_recovery_command("systemctl", &["restart", "ModemManager"]).await {
+                            match crate::service_manager::restart("ModemManager").await {
                                 Ok(_) => {
                                     cellular_problem_active = true;
                                     system_events
@@ -7568,7 +7565,7 @@ pub async fn data_connection_watchdog(
                             .await;
                         modem_outage_reported = true;
                     }
-                    match run_recovery_command("systemctl", &["restart", "ModemManager"]).await {
+                    match crate::service_manager::restart("ModemManager").await {
                         Ok(_) => {
                             last_modem_restart_at = Some(Instant::now());
                             missing_count = 0;

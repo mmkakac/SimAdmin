@@ -4049,12 +4049,7 @@ pub async fn run_safe_os_reboot_sequence(
 
     // 尽力尝试让调制解调器优雅脱网并下电，使用 any 适配动态 Modem 序号，且设为允许容错（避免因已脱网或序号漂移产生非预期警告）
     let _ = run_reboot_prep_command("disable modem radio", "mmcli", &["-m", "any", "-d"], true);
-    if let Some(message) = run_reboot_prep_command(
-        "stop ModemManager IPC service",
-        "systemctl",
-        &["stop", "ModemManager"],
-        false,
-    ) {
+    if let Err(message) = crate::service_manager::stop("ModemManager").await {
         system_events
             .emit_code(
                 system_event_codes::SYSTEM_SERVICE_REBOOT_PREP_FAILED,
@@ -4208,9 +4203,7 @@ pub async fn restart_service_handler(State(app): State<AppState>) -> impl IntoRe
         .await;
     tokio::spawn(async move {
         tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-        let _ = Command::new("systemctl")
-            .args(["restart", "simadmin"])
-            .output();
+        let _ = crate::service_manager::restart("simadmin").await;
     });
     (
         StatusCode::OK,

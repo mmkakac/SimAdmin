@@ -43,6 +43,7 @@ mod notification;
 mod notification_queue;
 mod ota;
 mod serial;
+mod service_manager;
 mod sms_listener;
 mod state;
 mod system_event;
@@ -153,6 +154,15 @@ async fn spa_fallback(uri: Uri) -> Response {
 /// 启动后立刻通过 ExecStartPost 将日志级别降回 INFO。
 /// 这完美绕过了 Modem.Command 的 Unauthorized 限制，同时保持系统纯净。
 fn ensure_modemmanager_debug_override() {
+    // OpenWrt 上 ModemManager 由 procd 管理，没有 systemd drop-in 机制。
+    // ModemManager 官方包未启用 --debug，AT 通道能力会退化，这里只记录提示。
+    if crate::service_manager::is_openwrt() {
+        tracing::info!(
+            "OpenWrt detected: skipping systemd ModemManager debug drop-in; \
+             AT-based SIM/SMSC reads may be limited"
+        );
+        return;
+    }
     let override_dir = "/etc/systemd/system/ModemManager.service.d";
     let legacy_override_file = "/etc/systemd/system/ModemManager.service.d/99-simadmin-debug.conf";
     let override_file = "/etc/systemd/system/ModemManager.service.d/zz-simadmin-debug.conf";
@@ -181,13 +191,9 @@ ExecStartPost=-/usr/bin/busctl call org.freedesktop.ModemManager1 /org/freedeskt
             return;
         }
 
-        // Reload systemd & restart ModemManager silently
-        let _ = std::process::Command::new("systemctl")
-            .arg("daemon-reload")
-            .output();
-        let _ = std::process::Command::new("systemctl")
-            .args(["restart", "ModemManager.service"])
-            .output();
+        // Reload service manager & restart ModemManager silently
+        crate::service_manager::daemon_reload();
+        let _ = crate::service_manager::restart_blocking("ModemManager.service");
         tracing::info!("ModemManager debug override applied and service restarted.");
     }
 }

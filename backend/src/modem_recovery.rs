@@ -62,6 +62,12 @@ fn atomic_write_file(target_path: &Path, content: &str, mode: u32) -> std::io::R
 /// 检查并确保宿主机上的开机看门狗脚本、systemd 单元与定时器已同步最新内嵌版本并处于启用状态
 #[cfg(unix)]
 pub fn ensure_modem_recovery_assets_installed() {
+    // OpenWrt 使用 procd，没有 systemd 单元/定时器；对应的开机自愈由
+    // netifd + ModemManager 自身的 hotplug 脚本，以及 procd respawn 策略承担。
+    if crate::service_manager::is_openwrt() {
+        info!("OpenWrt detected: systemd-based modem recovery units are skipped");
+        return;
+    }
     let script_target = Path::new(SCRIPT_PATH);
     let mut script_updated = false;
 
