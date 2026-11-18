@@ -1,0 +1,80 @@
+name: Build-Volte-OpenWrt-Package
+
+# 把上游（3899/SimAdmin）VoLTE 版静态二进制，套上本仓库的 OpenWrt shim + procd 封装，
+# 产出可直接安装的 tar.gz。仅手动触发；运行时请选择包含 openwrt/volte/ 的分支（如 openwrt-port）。
+# 上游 VoLTE 版目前发到 v1.2.3（v1.2.4 未包含 VoLTE 资产）。
+
+on:
+  workflow_dispatch:
+    inputs:
+      upstream_version:
+        description: '上游 VoLTE 版版本号（如 1.2.3）'
+        required: true
+        default: '1.2.3'
+      arch:
+        description: '目标架构'
+        required: true
+        type: choice
+        options:
+          - aarch64
+          - armv7
+          - x86_64
+        default: 'aarch64'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Wrap ${{ inputs.arch }} VoLTE
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download upstream VoLTE package
+        env:
+          VER: ${{ inputs.upstream_version }}
+          ARCH: ${{ inputs.arch }}
+        run: |
+          set -e
+          URL="https://github.com/3899/SimAdmin/releases/download/v${VER}/simadmin-volte-${ARCH}-v${VER}.tar.gz"
+          echo "fetch $URL"
+          mkdir -p upstream && cd upstream
+          curl -sSL --retry 3 --retry-delay 5 -o pkg.tar.gz "$URL"
+          tar xzf pkg.tar.gz
+          test -f simadmin || { echo "上游包内未找到 simadmin"; exit 1; }
+          file simadmin
+          cat meta.json || true
+
+      - name: Assemble OpenWrt bundle
+        env:
+          VER: ${{ inputs.upstream_version }}
+          ARCH: ${{ inputs.arch }}
+        run: |
+          set -e
+          OUT="release/simadmin-volte-openwrt-${ARCH}-v${VER}"
+          mkdir -p "$OUT"
+          cp upstream/simadmin "$OUT/simadmin"
+          chmod 755 "$OUT/simadmin"
+          cp -r upstream/www "$OUT/www"
+          cp upstream/meta.json "$OUT/meta.json" 2>/dev/null || true
+          mkdir -p "$OUT/files/opt/simadmin" "$OUT/files/etc"
+          cp -r openwrt/volte/files/etc/. "$OUT/files/etc/"
+          cp -r openwrt/volte/files/opt/simadmin/bin "$OUT/files/opt/simadmin/"
+          chmod 755 "$OUT/files/opt/simadmin/bin/"*
+          cp openwrt/volte/install.sh "$OUT/install.sh"
+          cp openwrt/volte/README.md "$OUT/README-OpenWrt.md"
+          cp LICENSE "$OUT/LICENSE" 2>/dev/null || true
+
+          tar -C release -czf "release/simadmin-volte-openwrt-${ARCH}-v${VER}.tar.gz" "simadmin-volte-openwrt-${ARCH}-v${VER}"
+          sha256sum "release/simadmin-volte-openwrt-${ARCH}-v${VER}.tar.gz" | tee release/simadmin-volte-openwrt-${ARCH}.sha256
+          ls -lh release/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: simadmin-volte-openwrt-${{ inputs.arch }}
+          path: |
+            release/*.tar.gz
+            release/*.sha256
+          if-no-files-found: error
+          retention-days: 30
