@@ -96,3 +96,30 @@ VoLTE 引擎启用时会临时「接管」这个数据 profile 再交还；`auto
   不影响运行，也不需要清理。
 - 本包是**上游二进制原样分发**（GPLv3：源码见上游仓库与 VoLTE 版对应的源码发布渠道），
   本目录只额外提供 shim 与 procd 封装。
+
+## 硬前提：内核必须支持 XFRM（IPsec）
+
+中国移动 / 联通 / 电信的 IMS 在 SIP REGISTER 阶段**强制要求 IPsec 安全协商**
+（P-CSCF 返回 `Security-Server: ipsec-3gpp;alg=hmac-md5-96;prot=esp`）。
+VoLTE 引擎通过 `ip xfrm` 安装 SA 与策略，因此内核必须编入 XFRM 与 ESP。
+
+若内核裁剪掉了这块，日志会出现：
+
+```
+WARN Native VoLTE IPsec registration failed, falling back to plain UDP SIP
+reason=volte_command_failed:ip:Cannot open netlink socket: Protocol not supported
+WARN Native VoLTE plain UDP runtime failed reason=volte_register_initial_unexpected_status:420
+```
+
+自查：
+
+```sh
+ip xfrm state                                     # 报 Protocol not supported 即内核缺 XFRM
+zcat /proc/config.gz | grep -E "XFRM_USER|INET_ESP"
+```
+
+处理：内核内置选项见 `openwrt/kernel/xfrm.config`，追加到 target 的 `config-<版本>` 后重编固件。
+这是固件层限制，软件侧无法绕过（用户态 IPsec 方案无法与引擎自行安装的 SA 对接）。
+
+顺带说明：msm89xx/msm8916（UF896 类）社区 target 的 `config-5.10` 默认没有任何 XFRM 选项，
+属于常见裁剪点；若固件由厂商提供且无法重编，VoLTE 只能等厂商放带 IMS 的固件。
