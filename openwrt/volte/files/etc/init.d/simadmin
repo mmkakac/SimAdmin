@@ -1,0 +1,53 @@
+#!/bin/sh /etc/rc.common
+# SimAdmin（VoLTE 版）procd 服务脚本
+
+START=95
+STOP=10
+USE_PROCD=1
+
+INSTALL_DIR=/opt/simadmin
+DATA_DIR=/opt/simadmin
+
+start_service() {
+	config_load simadmin
+	local enabled port host wwan data_dir install_dir
+	config_get_bool enabled main enabled 1
+	config_get port main port 3000
+	config_get host main host "0.0.0.0"
+	config_get wwan main wwan_iface "wwan"
+	config_get data_dir main data_dir "$DATA_DIR"
+	config_get install_dir main install_dir "$INSTALL_DIR"
+
+	[ "$enabled" = "1" ] || { logger -t simadmin "disabled by uci"; return 0; }
+
+	mkdir -p "$data_dir"
+	# 上游二进制默认在「可执行文件同级」读写 config.json / data.db，
+	# 因此这里用符号链接把数据目录指到期望位置（保持 /opt 干净可升级）。
+	if [ "$data_dir" != "$install_dir" ]; then
+		[ -f "$install_dir/config.json" ] && cp -f "$install_dir/config.json" "$data_dir/config.json" 2>/dev/null
+		[ -f "$install_dir/data.db" ] && cp -f "$install_dir/data.db" "$data_dir/data.db" 2>/dev/null
+	fi
+
+	procd_open_instance
+	procd_set_param command "$install_dir/simadmin" serve --port "$port" --host "$host"
+	procd_set_param env \
+		PATH="$install_dir/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
+		SIMADMIN_WWAN_IFACE="$wwan" \
+		SYSTEMCTL_BIN="$install_dir/bin/systemctl" \
+		HOME="$data_dir"
+	procd_set_param cwd "$install_dir"
+	procd_set_param respawn 3600 5 5
+	procd_set_param stdout 1
+	procd_set_param stderr 1
+	procd_close_instance
+}
+
+stop_service() {
+	# 让 VoLTE 引擎先优雅退出（上游会在退出时还原 IMS 网卡/路由）
+	killall -TERM simadmin 2>/dev/null
+	sleep 1
+}
+
+service_triggers() {
+	procd_add_reload_trigger "simadmin"
+}

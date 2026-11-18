@@ -1,0 +1,9 @@
+config main 'main'
+	option enabled '1'
+	option port '3000'
+	option host '0.0.0.0'
+	# 蜂窝数据所在 netifd 接口（VoLTE 启用时上游会临时接管该接口的 profile）
+	option wwan_iface 'wwan'
+	# 数据目录（config.json / data.db）
+	option data_dir '/opt/simadmin'
+	option install_dir '/opt/simadmin'

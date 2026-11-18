@@ -1,0 +1,79 @@
+#!/bin/sh
+# nmcli 兼容层（OpenWrt / netifd）
+#
+# 上游 VoLTE 版对 nmcli 的用法集中在三处：
+#   1) nmcli -t -f NAME,TYPE connection show           —— 探测是否存在 simadmin-modem 配置
+#   2) nmcli connection add type gsm con-name simadmin-modem ... gsm.apn ... —— 建蜂窝 profile
+#   3) nmcli connection up|down <name>                 —— 启停蜂窝数据
+# VoLTE 自身的 IMS 承载走 QMI + netlink，不依赖 NetworkManager；
+# 这里把「建/启/停 profile」映射到 netifd 的 ifup/ifdown，探测类命令返回空即可。
+
+IFACE="${SIMADMIN_WWAN_IFACE:-wwan}"
+LOG=/tmp/simadmin-nmcli.log
+
+log() { echo "[nmcli-shim] $*" >> "$LOG" 2>/dev/null; }
+
+# 提取 --device/ifname? 上游用 ifname，取第一个非 flag 值
+ACTION1="$1"; ACTION2="$2"
+
+ifup_iface() {
+	if command -v ifstatus >/dev/null 2>&1; then
+		ifup "$IFACE" >/dev/null 2>&1
+	else
+		log "ifstatus 不存在，跳过 ifup $IFACE"
+	fi
+}
+
+ifdown_iface() {
+	if command -v ifstatus >/dev/null 2>&1; then
+		ifdown "$IFACE" >/dev/null 2>&1
+	fi
+}
+
+case "$ACTION1" in
+	connection)
+		case "$ACTION2" in
+			show)
+				# 无配置：输出空列表
+				exit 0
+				;;
+			add)
+				log "pretend connection add: $*"
+				exit 0
+				;;
+			up|activate)
+				log "connection up -> ifup $IFACE"
+				ifup_iface
+				exit 0
+				;;
+			down|deactivate)
+				log "connection down -> ifdown $IFACE"
+				ifdown_iface
+				exit 0
+				;;
+			modify|delete|reload)
+				exit 0
+				;;
+			*)
+				exit 0
+				;;
+		esac
+		;;
+	device)
+		# device status / wifi list 等，返回空
+		exit 0
+		;;
+	radio)
+		exit 0
+		;;
+	monitor|general|networking)
+		exit 0
+		;;
+	-V|--version)
+		echo "nmcli tool, version 1.0 (simadmin-shim)"
+		exit 0
+		;;
+	*)
+		exit 0
+		;;
+esac

@@ -1,0 +1,23 @@
+#!/bin/sh
+# iptables 兼容层
+#
+# 上游只做只读诊断（`iptables -S`）。OpenWrt 上若系统自带 iptables 就直接转交；
+# 没有（纯 nftables/fw4）时返回空规则集，让上游统计显示为 0 而不是报错。
+
+REAL=/usr/sbin/iptables
+[ -x "$REAL" ] || REAL=/usr/bin/iptables
+
+if [ -x "$REAL" ]; then
+	exec "$REAL" "$@"
+fi
+
+# 无 iptables：只回应只读查询
+case "$1" in
+	-S|--list-rules|-L|--list|--version|-V)
+		[ "$1" = "-V" ] || [ "$1" = "--version" ] && { echo "iptables v1.8.9 (simadmin-shim)"; exit 0; }
+		exit 0
+		;;
+	*)
+		exit 0
+		;;
+esac

@@ -1,0 +1,79 @@
+#!/bin/sh
+# systemctl 兼容层（OpenWrt / procd）
+#
+# 上游 VoLTE 版会执行 `systemctl restart ModemManager.service`、
+# `systemctl is-active --quiet NetworkManager.service` 等命令。procd 环境里
+# 把它们翻译成 /etc/init.d/<svc> 调用，缺失的单元（如 NetworkManager）
+# 视为「不存在但不报错」，避免上游代码把启动流程判成失败。
+
+map_unit() {
+	case "$1" in
+		ModemManager.service|ModemManager|modemmanager.service) echo modemmanager ;;
+		simadmin.service|simadmin) echo simadmin ;;
+		NetworkManager.service|NetworkManager|networkmanager.service) echo networkmanager ;;
+		*) echo "$1" | sed -e 's/\.service$//' -e 's/\.timer$//' -e 's/\.socket$//' ;;
+	esac
+}
+
+init_exists() { [ -x "/etc/init.d/$1" ]; }
+
+# 过滤 flag 参数，取前两个非 flag 参数为 子命令 与 单元名
+SUB=""
+UNIT=""
+for a in "$@"; do
+	case "$a" in
+		-*) : ;;
+		*)
+			if [ -z "$SUB" ]; then SUB="$a"
+			elif [ -z "$UNIT" ]; then UNIT="$a"
+			fi
+			;;
+	esac
+done
+
+SVC="$(map_unit "$UNIT")"
+
+case "$SUB" in
+	restart|start|stop|reload|try-restart|force-reload|condrestart)
+		if init_exists "$SVC"; then
+			if [ "$SUB" = "condrestart" ]; then SUB="restart"; fi
+			/etc/init.d/"$SVC" "$SUB" >/dev/null 2>&1
+			exit 0
+		fi
+		echo "[systemctl-shim] no /etc/init.d/$SVC (unit: $UNIT), ignored" >&2
+		exit 0
+		;;
+	is-active)
+		if init_exists "$SVC" && /etc/init.d/"$SVC" status >/dev/null 2>&1; then
+			echo active
+			exit 0
+		fi
+		echo inactive
+		exit 3
+		;;
+	status)
+		if init_exists "$SVC" && /etc/init.d/"$SVC" status >/dev/null 2>&1; then
+			echo "active: $UNIT"
+			exit 0
+		fi
+		echo "inactive: $UNIT"
+		exit 3
+		;;
+	is-enabled)
+		if init_exists "$SVC" && /etc/init.d/"$SVC" enabled >/dev/null 2>&1; then
+			echo enabled; exit 0
+		fi
+		echo disabled; exit 1
+		;;
+	enable|disable|daemon-reload|daemon-reexec|mask|unmask|show|cat)
+		# procd 无等价语义，静默成功
+		exit 0
+		;;
+	start-*|stop-*|reload-*)
+		# 定时器类单元在 OpenWrt 上不安装，视为成功
+		exit 0
+		;;
+	*)
+		exit 0
+		;;
+esac
