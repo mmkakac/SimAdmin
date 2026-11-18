@@ -1,0 +1,58 @@
+#!/bin/sh /etc/rc.common
+
+# SimAdmin for OpenWrt - procd 服务脚本
+# 依赖：dbus（系统总线）、modemmanager（ModemManager 守护进程）
+# 安装位置：/opt/simadmin/{simadmin,www}；数据目录：/etc/simadmin
+
+USE_PROCD=1
+START=96
+STOP=10
+
+PROG=/opt/simadmin/simadmin
+DATA_DIR=/etc/simadmin
+
+start_service() {
+	local port host enabled
+	config_load simadmin
+	config_get_bool enabled main enabled 1
+	config_get port main port 3000
+	config_get host main host 0.0.0.0
+
+	[ "$enabled" = "1" ] || {
+		logger -t simadmin "disabled in /etc/config/simadmin"
+		return 0
+	}
+
+	[ -x "$PROG" ] || {
+		logger -t simadmin "binary not found: $PROG"
+		return 1
+	}
+
+	mkdir -p "$DATA_DIR"
+
+	# 没有系统 D-Bus 时后端会在启动阶段直接退出，这里提前给出明确日志
+	if [ ! -S /var/run/dbus/system_bus_socket ]; then
+		logger -t simadmin "warning: system dbus socket missing (/var/run/dbus/system_bus_socket); start /etc/init.d/dbus first"
+	fi
+
+	procd_open_instance simadmin
+	procd_set_param command "$PROG" serve --host "$host" --port "$port"
+	procd_set_param env \
+		SIMADMIN_DATA_DIR="$DATA_DIR" \
+		DBUS_SYSTEM_BUS_ADDRESS="unix:path=/var/run/dbus/system_bus_socket" \
+		RUST_LOG="${RUST_LOG:-info}"
+	procd_set_param respawn 3600 5 5
+	procd_set_param stdout 1
+	procd_set_param stderr 1
+	procd_set_param file /etc/config/simadmin
+	procd_close_instance
+}
+
+reload_service() {
+	stop
+	start
+}
+
+service_triggers() {
+	procd_add_reload_trigger "simadmin"
+}

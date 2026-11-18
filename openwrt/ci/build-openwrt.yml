@@ -1,0 +1,159 @@
+name: Build-OpenWrt-Package
+
+# 面向 OpenWrt（musl / 无 systemd）的静态二进制构建，产出可直接 scp 到设备使用的 tar.gz。
+# 与 build-ota-package.yml 的区别：
+#   - 不向 3899/SimAdmin 上传 Release（fork 上跑不会因缺少上游 token 失败）
+#   - x86_64 使用真 musl 静态；aarch64 / armv7 使用全静态 glibc（OpenWrt 内核可直接执行）
+#   - 额外打包 procd 服务脚本、UCI 配置与安装脚本
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '版本号（填 auto 则读取 VERSION）'
+        required: false
+        default: 'auto'
+      use_upx:
+        description: '使用 UPX 压缩（armv7 自动跳过）'
+        required: false
+        type: boolean
+        default: false
+  push:
+    branches:
+      - main
+    paths:
+      - 'backend/**'
+      - 'crates/**'
+      - 'frontend/**'
+      - 'openwrt/**'
+      - '.github/workflows/build-openwrt.yml'
+
+env:
+  CARGO_TERM_COLOR: always
+  SQLITE3_STATIC: '1'
+  LIBSQLITE3_SYS_USE_PKG_CONFIG: '0'
+
+permissions:
+  contents: read
+
+jobs:
+  resolve:
+    name: Resolve version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: v
+        run: |
+          ver="${{ inputs.version }}"
+          if [ -z "$ver" ] || [ "$ver" = "auto" ]; then ver="$(cat VERSION | tr -d '[:space:]')"; fi
+          echo "version=$ver" >> "$GITHUB_OUTPUT"
+          echo "building $ver"
+
+  build:
+    name: Build ${{ matrix.arch }}
+    needs: resolve
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # ---- x86_64: 真 musl 静态（软路由 / 虚拟机）----
+          - arch: x86_64
+            target: x86_64-unknown-linux-musl
+            cc: musl-gcc
+            linker_env: CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER
+            linker: musl-gcc
+            extra_apt: musl-tools
+          # ---- aarch64: 交叉 gcc + crt-static（全静态，不依赖 OpenWrt libc）----
+          - arch: aarch64
+            target: aarch64-unknown-linux-gnu
+            cc: aarch64-linux-gnu-gcc
+            linker_env: CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER
+            linker: aarch64-linux-gnu-gcc
+            extra_apt: gcc-aarch64-linux-gnu
+          # ---- armv7 hard-float ----
+          - arch: armv7
+            target: armv7-unknown-linux-gnueabihf
+            cc: arm-linux-gnueabihf-gcc
+            linker_env: CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER
+            linker: arm-linux-gnueabihf-gcc
+            extra_apt: gcc-arm-linux-gnueabihf
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            ${{ matrix.extra_apt }} file binutils ca-certificates
+          if [ "${{ inputs.use_upx }}" = "true" ]; then sudo apt-get install -y upx-ucl || true; fi
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: openwrt-${{ matrix.target }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: openwrt-${{ matrix.target }}-
+
+      - name: Build backend (fully static)
+        env:
+          CC_TARGET: ${{ matrix.cc }}
+          LINKER_ENV: ${{ matrix.linker_env }}
+          LINKER: ${{ matrix.linker }}
+          TARGET: ${{ matrix.target }}
+          RUSTFLAGS: -C target-feature=+crt-static
+        run: |
+          export ${LINKER_ENV}="${LINKER}"
+          export CC_$(echo "$TARGET" | tr '-' '_')="$CC_TARGET"
+          cargo build --locked --release --target "$TARGET" -p simadmin
+          file "target/$TARGET/release/simadmin"
+          readelf -d "target/$TARGET/release/simadmin" | grep -c NEEDED || true
+
+      - name: Build frontend
+        run: |
+          cd frontend
+          corepack enable
+          corepack prepare pnpm@9 --activate || npm i -g pnpm@9
+          pnpm install --frozen-lockfile
+          pnpm exec vite build
+
+      - name: Assemble OpenWrt bundle
+        env:
+          TARGET: ${{ matrix.target }}
+          ARCH: ${{ matrix.arch }}
+          VERSION: ${{ needs.resolve.outputs.version }}
+        run: |
+          set -e
+          OUT="release/simadmin-openwrt-${ARCH}-v${VERSION}"
+          mkdir -p "$OUT/bin/$ARCH" "$OUT/files"
+          cp "target/$TARGET/release/simadmin" "$OUT/bin/$ARCH/simadmin"
+          chmod 755 "$OUT/bin/$ARCH/simadmin"
+          if [ "${{ inputs.use_upx }}" = "true" ] && [ "$ARCH" != "armv7" ]; then
+            upx --best --lzma "$OUT/bin/$ARCH/simadmin" || true
+          fi
+          cp -r frontend/dist "$OUT/www"
+          cp -r openwrt/files/. "$OUT/files/"
+          cp openwrt/install.sh openwrt/Makefile "$OUT/"
+          cp LICENSE "$OUT/LICENSE" 2>/dev/null || true
+          cp openwrt/README.md "$OUT/README-OpenWrt.md" 2>/dev/null || true
+          tar -C release -czf "release/simadmin-openwrt-${ARCH}-v${VERSION}.tar.gz" "simadmin-openwrt-${ARCH}-v${VERSION}"
+          sha256sum "release/simadmin-openwrt-${ARCH}-v${VERSION}.tar.gz" | tee "release/simadmin-openwrt-${ARCH}.sha256"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: simadmin-openwrt-${{ matrix.arch }}
+          path: |
+            release/*.tar.gz
+            release/*.sha256
+          if-no-files-found: error
+          retention-days: 30

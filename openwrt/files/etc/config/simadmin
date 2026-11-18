@@ -1,0 +1,9 @@
+# SimAdmin 服务配置
+# uci set simadmin.main.port=8080 后执行 /etc/init.d/simadmin restart 生效
+
+config simadmin 'main'
+	option enabled '1'
+	# Web 监听端口
+	option port '3000'
+	# 监听地址，默认 0.0.0.0 便于局域网访问
+	option host '0.0.0.0'
