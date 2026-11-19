@@ -177,3 +177,14 @@ chain volte_ipsec {
 	ip6 nexthdr esp accept
 }
 ```
+
+## 已验证的上游版本
+
+| 上游版本 | VoLTE 资产 | 结论 |
+|---|---|---|
+| v1.2.3 | `simadmin-volte-aarch64-v1.2.3.tar.gz` | 移植首发，真机注册成功 |
+| v1.2.4 | 无 VoLTE 资产 | 跳过 |
+| v1.2.5 | `simadmin-volte-aarch64-v1.2.5.tar.gz` | 依赖面未变（systemctl/nmcli/udevadm/qmicli/`/opt/simadmin`），现有 shim 直接适用 |
+
+v1.2.5 源码公开的变更集中在短信验证码提取、OTA 页面、D-Bus 驻网检测；
+VoLTE 实现仍是上游独立分发的预编译二进制（`edition: volte`、`aarch64-unknown-linux-musl`、UPX 打包）。
