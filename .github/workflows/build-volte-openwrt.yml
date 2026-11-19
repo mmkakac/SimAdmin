@@ -1,16 +1,16 @@
 name: Build-Volte-OpenWrt-Package
 
 # 把上游（3899/SimAdmin）VoLTE 版静态二进制，套上本仓库的 OpenWrt shim + procd 封装，
-# 产出可直接安装的 tar.gz。仅手动触发。
-# 上游 VoLTE 版目前发到 v1.2.3（v1.2.4 未包含 VoLTE 资产）。
+# 产出可直接安装的 tar.gz。仅手动触发；运行时请选择包含 openwrt/volte/ 的分支（如 openwrt-port）。
+# 上游 VoLTE 版最新为 v1.2.5（v1.2.5 已包含 VoLTE 资产）。
 
 on:
   workflow_dispatch:
     inputs:
       upstream_version:
-        description: '上游 VoLTE 版版本号（如 1.2.3）'
+        description: '上游 VoLTE 版版本号（如 1.2.5）'
         required: true
-        default: '1.2.3'
+        default: '1.2.5'
       arch:
         description: '目标架构'
         required: true
