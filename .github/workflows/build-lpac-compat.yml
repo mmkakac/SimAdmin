@@ -4,8 +4,8 @@ name: Build lpac compatibility bundles
 # They ship their own libqmi, avoiding a host libqmi ABI dependency.
 
 on:
-  schedule:
-    - cron: '0 0 5,20 * *'
+ # schedule:
+  #  - cron: '0 0 5,20 * *'
   workflow_dispatch:
     inputs:
       lpac_ref:
