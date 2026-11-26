@@ -7,6 +7,7 @@ USE_PROCD=1
 
 INSTALL_DIR=/opt/simadmin
 DATA_DIR=/opt/simadmin
+MWD_PID=/var/run/simadmin-modem-watchdog.pid
 
 start_service() {
 	config_load simadmin
@@ -36,6 +37,15 @@ start_service() {
 	# 等 ModemManager 就绪并确保 modem 处于 enabled（否则 VoLTE 引擎拿不到 QMI/AT）
 	[ -x "$install_dir/bin/modem-ready" ] && ( "$install_dir/bin/modem-ready" 30 >/dev/null 2>&1 & )
 
+	# 常驼看护：引擎 IMS 启动失败后会清理上下文并把 modem 打回 disabled，
+	# 随后 supervisor「不碰硬件等注册」，导致一直无网络（看起来像飞行模式）。
+	config_get_bool modem_watchdog main modem_watchdog 1
+	config_get mwd_interval main modem_watchdog_interval 30
+	if [ "$modem_watchdog" = "1" ] && [ -x "$install_dir/bin/modem-watchdog" ]; then
+		[ -f "$MWD_PID" ] && kill "$(cat "$MWD_PID" 2>/dev/null)" 2>/dev/null
+		( INTERVAL="$mwd_interval" "$install_dir/bin/modem-watchdog" >/dev/null 2>&1 & echo $! > "$MWD_PID" )
+	fi
+
 	procd_open_instance
 	procd_set_param command "$install_dir/simadmin" serve --port "$port" --host "$host"
 	procd_set_param env \
@@ -53,6 +63,7 @@ start_service() {
 
 stop_service() {
 	# 让 VoLTE 引擎先优雅退出（上游会在退出时还原 IMS 网卡/路由）
+	[ -f "$MWD_PID" ] && kill "$(cat "$MWD_PID" 2>/dev/null)" 2>/dev/null && rm -f "$MWD_PID"
 	killall -TERM simadmin 2>/dev/null
 	sleep 1
 }
