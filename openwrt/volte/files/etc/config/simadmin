@@ -7,3 +7,8 @@ config main 'main'
 	# 数据目录（config.json / data.db）
 	option data_dir '/opt/simadmin'
 	option install_dir '/opt/simadmin'
+	# 日志级别（对应 RUST_LOG）。默认 info。
+	# 想减少 logread 刷屏（例如屏蔽短信轮询心跳）可写成：
+	#   option rust_log 'info,simadmin::sms_listener=warn'
+	# 只保留警告以上：option rust_log 'warn'
+	option rust_log 'info'
