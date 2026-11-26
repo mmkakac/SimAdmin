@@ -12,3 +12,7 @@ config main 'main'
 	#   option rust_log 'info,simadmin::sms_listener=warn'
 	# 只保留警告以上：option rust_log 'warn'
 	option rust_log 'info'
+	# modem 看护：连续两次发现 modem 处于 disabled 就补一次 enable，
+	# 避免「开机后一直无网络、要手动关一次飞行模式」。暂停：touch /etc/simadmin.modem-watchdog.off
+	option modem_watchdog '1'
+	option modem_watchdog_interval '30'
