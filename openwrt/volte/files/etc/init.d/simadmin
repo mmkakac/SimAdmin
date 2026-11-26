@@ -17,6 +17,7 @@ start_service() {
 	config_get wwan main wwan_iface "wwan"
 	config_get data_dir main data_dir "$DATA_DIR"
 	config_get install_dir main install_dir "$INSTALL_DIR"
+	config_get rust_log main rust_log "info"
 
 	[ "$enabled" = "1" ] || { logger -t simadmin "disabled by uci"; return 0; }
 
@@ -41,7 +42,8 @@ start_service() {
 		PATH="$install_dir/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
 		SIMADMIN_WWAN_IFACE="$wwan" \
 		SYSTEMCTL_BIN="$install_dir/bin/systemctl" \
-		HOME="$data_dir"
+		HOME="$data_dir" \
+		RUST_LOG="${rust_log:-info}"
 	procd_set_param cwd "$install_dir"
 	procd_set_param respawn 3600 5 5
 	procd_set_param stdout 1
