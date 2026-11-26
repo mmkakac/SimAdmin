@@ -1,0 +1,44 @@
+#!/bin/sh
+# modem-watchdog —— 防止 modem 停留在 disabled（表现为「开机就是飞行模式」）
+#
+# 背景：上游 VoLTE 引擎在 IMS 启动失败后的 "Cleaning up native VoLTE IMS context"
+# 阶段会把 ModemManager 的 modem 打回 disabled，随后 supervisor 进入
+# waiting_for_network「不碰硬件等注册」，两边互等 → 一直无网络，
+# 用户在 UI 里手动关一次飞行模式（触发 Enable）才恢复。
+#
+# 本脚本每 INTERVAL 秒检查一次，连续 HITS 次看到 disabled 就补一次 enable。
+# 暂停：touch /etc/simadmin.modem-watchdog.off（开飞行模式前建议先暂停）
+
+INTERVAL=${INTERVAL:-30}
+HITS=${HITS:-2}
+PAUSE_FILE=/etc/simadmin.modem-watchdog.off
+
+hits=0
+
+while true; do
+	if [ -f "$PAUSE_FILE" ]; then
+		hits=0
+		sleep "$INTERVAL"
+		continue
+	fi
+
+	st=$(mmcli -m any 2>/dev/null | sed -n 's/.*| *state: *//p' | head -1)
+	case "$st" in
+		disabled)
+			hits=$((hits + 1))
+			if [ "$hits" -ge "$HITS" ]; then
+				if mmcli -m any -e >/dev/null 2>&1; then
+					logger -t simadmin "modem-watchdog: modem was disabled, re-enabled"
+				else
+					logger -t simadmin "modem-watchdog: failed to re-enable modem"
+				fi
+				hits=0
+			fi
+			;;
+		*)
+			hits=0
+			;;
+	esac
+
+	sleep "$INTERVAL"
+done
